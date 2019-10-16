@@ -108,9 +108,10 @@ if __name__ == "__main__":
                     pred_heads = json_line['predicate-head-idxs']
                     event_text = []
                     for head in pred_heads:
-                        predicate = ppat.event_dict[ppat.tokens[head]]
-                        pred_text = predpatt2text(predicate)
-                        event_text.append(pred_text)
+                        if head < len(ppat.tokens):
+                            predicate = ppat.event_dict[ppat.tokens[head]]
+                            pred_text = predpatt2text(predicate)
+                            event_text.append(pred_text)
                     json_line['event_text'] = event_text
                     json_line['sprl-predictions'] = []
                     line_idx += 1

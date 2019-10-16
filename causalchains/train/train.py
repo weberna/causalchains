@@ -20,6 +20,7 @@ import gc
 import glob
 import sys
 import os
+import logging
 
 from estimators import EXP_OUTCOME_COMPONENT, PROPENSITY_COMPONENT
 
@@ -37,7 +38,22 @@ def check_save_model_path(save_model):
         os.makedirs(model_dirname)
 
 
-        
+def validation(val_batches, model, loss_func)
+    model.eval()
+
+    valid_loss = 0.0
+    for v_iteration, instance in enumerate(val_batches):
+        model_outputs = model(instance) 
+        exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
+        exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
+        loss = exp_outcome_loss
+
+        valid_loss += loss
+  
+    valid_loss = valid_loss/(v_iteration+1)   
+    return valid_loss
+
+
 def train(args):
     """
     Train the model in the ol' fashioned way, just like grandma used to
@@ -45,57 +61,88 @@ def train(args):
         args (argparse.ArgumentParser)
     """
     #Load the data
-    print("\nLoading Vocab")
+    logging.info("\nLoading Vocab")
     evocab = du.load_vocab(args.evocab)
     tvocab = du.load_vocab(args.tvocab)
-    print("Event Vocab Loaded, Size {}".format(len(evocab.stoi.keys())))
-    print("Text Vocab Loaded, Size {}".format(len(tvocab.stoi.keys())))
+    logging.info("Event Vocab Loaded, Size {}".format(len(evocab.stoi.keys())))
+    logging.info("Text Vocab Loaded, Size {}".format(len(tvocab.stoi.keys())))
 
 
-    print("Loading Dataset")
+    logging.info("Loading Datasets")
     train_dataset = du.InstanceDataset(args.train_data, evocab, tvocab) 
-    print("Finished Loading Dataset {} examples".format(len(train_dataset)))
-    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, sort_within_batch=True, device=-1)
+    valid_dataset = du.InstanceDataset(args.valid_data, evocab, tvocab)
+    logging.info("Finished Loading Dataset {} examples".format(len(train_dataset)))
+
+    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=-1)
+    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=-1)
     train_data_len = len(train_dataset)
+    valid_data_len = len(valid_dataset)
 
     if args.load_model:
-        print("Loading the Model")
+        logging.info("Loading the Model")
         model = torch.load(args.load_model)
     else:
-        print("Creating the Model")
-        model = DAVAE(args.emb_size, hidsize, vocab, latents, layers=args.nlayers, use_cuda=use_cuda, pretrained=args.use_pretrained, dropout=args.dropout)
+        logging.info("Creating the Model")
         model = estimators.NaiveAdjustmentEstimator(args, evocab, tvocab)
 
     #create the optimizer
     if args.load_opt:
-        print("Loading the optimizer state")
+        logging.info("Loading the optimizer state")
         optimizer = torch.load(args.load_opt)
     else:
-        print("Creating the optimizer anew")
+        logging.info("Creating the optimizer anew")
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     loss_func = nn.CrossEntropyLoss()
 
     start_time = time.time() #start of epoch 1
-    curr_epoch = 1
-    valid_loss = [0.0]
-    for iteration, instance in enumerate(train_batches): #this will continue on forever (shuffling every epoch) till epochs finished
-        model.zero_grad()
+    best_valid_loss= float('inf')
+    best_epoch = args.epochs 
 
-        model_outputs = model(instance) 
+    #MAIN TRAINING LOOP
+    for curr_epoch in range(args.epochs):
+        for iteration, instance in enumerate(train_batches): 
+            model.train()
+            model.zero_grad()
+            model_outputs = model(instance) 
 
-        exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
-        exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
+            exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
+            exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
+            loss = exp_outcome_loss
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
+            optimizer.step() 
 
-        loss = exp_outcome_loss
-        # backward propagation
-        loss.backward()
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
-        # Optimize
-        optimizer.step() 
+            if (iteration % args.validate_after == 0) and iteration != 0:
+                logging.info("\nRunning Validation at Epoch/iteration {}/{}".format(curr_epoch, iteration))
+                new_valid_loss = validation(valid_batches, model, loss_func)
+                logging.info("\nValidation loss at Epoch/iteration {}/{}:{:.2f} - Best Validation Loss: {:.2f}".format(curr_epoch, iteration, new_valid_loss, best_valid_loss))
+                if new_valid_loss < best_valid_loss:
+                    logging.info("New Validation Best...Saving Model Checkpoint")  
+                    best_valid_loss = new_valid_loss
+                    best_epoch = curr_epoch
+                    torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, float(valid_loss[0])))
+                    torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, float(valid_loss[0])))
 
-        # End of an epoch - run validation
+        #END OF EPOCH
+        logging.info("\nEnd of Epoch {}, Running Validation".format(curr_epoch))
+        new_valid_loss = validation(valid_batches, model, loss_func)
+        logging.info("\nValidation loss at end of Epoch {}:{:.2f} - Best Validation Loss: {:.2f}".format(curr_epoch, new_valid_loss, best_valid_loss))
+        if new_valid_loss < best_valid_loss:
+            logging.info("New Validation Best...Saving Model Checkpoint")  
+            best_valid_loss = new_valid_loss
+            best_epoch = curr_epoch
+            torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, float(valid_loss[0])))
+            torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, float(valid_loss[0])))
+
+        if curr_epoch - best_epoch >= args.stop_after:
+            logging.info("\nNo improvement in {} epochs, terminating at epoch {}...".format(args.stop_after, curr_epoch))
+            logging.info("\nBest Validation Loss: {:.2f} at Epoch {}".format(best_valid_loss, best_epoch))
+            break
+
+             
+
 
 if __name__ == "__main__":
 
@@ -115,15 +162,16 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer', type=str, default='adam', help='adam, adagrad, sgd')
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=40, help='upper epoch limit')
+    parser.add_argument('--stop_after', type=int, default=2, help='Stop after this many epochs have passed without decrease in validation loss')
     parser.add_argument('--batch_size', type=int, default=32, metavar='N', help='batch size')
     parser.add_argument('--seed', type=int, default=11, help='random seed') 
     parser.add_argument('--cuda', action='store_true', help='use CUDA')
     parser.add_argument('-save_model', default='model_checkpoint.pt', help="""Model filename""")
     parser.add_argument('--load_model', type=str)
     parser.add_argument('--load_opt', type=str)
-    parser.add_argument
 
-    
+
+    logging.basicConfig(level=logging.INFO)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -135,7 +183,7 @@ if __name__ == "__main__":
 
     if torch.cuda.is_available():
         if not args.cuda:
-            print("WARNING: You have a CUDA device, so you should probably run with --cuda")
+            logging.warning("WARNING: You have a CUDA device, so you should probably run with --cuda")
         else:
             torch.cuda.manual_seed(args.seed)
 
