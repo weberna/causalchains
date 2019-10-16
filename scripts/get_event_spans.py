@@ -2,6 +2,7 @@
 import sys 
 import os
 import json
+import argparse
 from predpatt import PredPatt, load_conllu
 
 #usage: python decomp2train_format.py input.decompevent.json input.txt.conll output.json
@@ -51,27 +52,37 @@ def concat_single_chunk(json_chunk_list): #Convert a list of sentential json obj
     return outdict
             
 
-def convert_to_train(concat_chunk):
+def convert_to_train(concat_chunk, include_context=False, max_context_size=10): #convert a single connll chunk (output of concat_single_chunk) into individual training instances
     instances = []
     for i in range(len(concat_chunk['event_chain'])-1):
         event_1 = concat_chunk['event_chain'][i]
         event_2 = concat_chunk['event_chain'][i+1]
         text_1 = concat_chunk['event_texts'][i]
-        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1})
+
+        event_prev_text = concat_chunk['event_chain'][:i][-max_context_size:] if include_context else [] #only take previous max_context_size
+        event_prev_text_nodup = [i for n, i in enumerate(event_prev_text) if i not in event_prev_text[:n]] #remove duplicates
+
+        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1, 'e1prev_intext':event_prev_text_nodup})
     return instances
         
-        
-    
 
 
 if __name__ == "__main__":
-    decompdir = sys.argv[1].rstrip("/")
-    conlldir= sys.argv[2].rstrip("/")
-    outfile = sys.argv[3]
+    parser = argparse.ArgumentParser(description='EventSpansScrip')
+    parser.add_argument('--decompdir', type=str, help='Directory with decomp event json files' )
+    parser.add_argument('--conlldir', type=str, help='Directory with conll files of data')
+    parser.add_argument('--outfile', type=str)
+    parser.add_argument('--include_context', action='store_true', help='Whether or not to include the previous events in chain')
+    parser.add_argument('--max_context_size', type=int, default=10)
+    args = parser.parse_args()
 
-#    decompfile = sys.argv[1]
-#    conllfile= sys.argv[2]
+
+#    decompdir = sys.argv[1].rstrip("/")
+#    conlldir= sys.argv[2].rstrip("/")
 #    outfile = sys.argv[3]
+    decompdir = args.decompdir.rstrip("/")
+    conlldir= args.conlldir.rstrip("/")
+    outfile = args.outfile
 
     output_writer = open(outfile, 'w')
 
@@ -102,7 +113,7 @@ if __name__ == "__main__":
                 if line_idx >= len(decomp_lines_json_chunk):
                     break
 
-                if decomp_lines_json_chunk[line_idx]['sent-id'] == sent_id:
+                if decomp_lines_json_chunk[line_idx]['sent-id'] == sent_id: #check if there is a matching decomp extraction for this conll line
                     json_line = decomp_lines_json_chunk[line_idx]
                     ppat = PredPatt(parse)
                     pred_heads = json_line['predicate-head-idxs']
@@ -118,7 +129,7 @@ if __name__ == "__main__":
                         
     
 #    print(list(zip(*concat_single_chunk(decomp_lines_json_chunk).values())))
-            instances = convert_to_train(concat_single_chunk(decomp_lines_json_chunk))
+            instances = convert_to_train(concat_single_chunk(decomp_lines_json_chunk), include_context=args.include_context, max_context_size=args.max_context_size)
 
             for inst in instances:
                 json.dump(inst, output_writer)
