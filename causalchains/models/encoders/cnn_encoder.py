@@ -56,7 +56,8 @@ class CnnEncoder(nn.Module):
         self._num_filters = num_filters
         self._ngram_filter_sizes = ngram_filter_sizes
         self._activation = conv_layer_activation
-        self._output_dim = output_dim
+        self.output_dim = output_dim
+        self.largest_ngram_size = max(ngram_filter_sizes)
 
         self._convolution_layers = [Conv1d(in_channels=self._embedding_dim,
                                            out_channels=self._num_filters,
@@ -66,11 +67,11 @@ class CnnEncoder(nn.Module):
             self.add_module('conv_layer_%d' % i, conv_layer)
 
         maxpool_output_dim = self._num_filters * len(self._ngram_filter_sizes)
-        if self._output_dim:
-            self.projection_layer = Linear(maxpool_output_dim, self._output_dim)
+        if self.output_dim:
+            self.projection_layer = Linear(maxpool_output_dim, self.output_dim)
         else:
             self.projection_layer = None
-            self._output_dim = maxpool_output_dim
+            self.output_dim = maxpool_output_dim
 
 
     def forward(self, tokens: torch.Tensor, mask: torch.Tensor):  # pylint: disable=arguments-differ

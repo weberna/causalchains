@@ -10,8 +10,8 @@ import numpy as np
 import random
 import math
 import torch.nn.functional as F
-import causalchains.data_utils as du
-from causalchains.data_utils import PAD_TOK
+import causalchains.utils.data_utils as du
+from causalchains.utils.data_utils import PAD_TOK
 import causalchains.models.estimator_model as estimators
 import time
 from torchtext.vocab import GloVe
@@ -22,7 +22,7 @@ import sys
 import os
 import logging
 
-from estimators import EXP_OUTCOME_COMPONENT, PROPENSITY_COMPONENT
+from causalchains.models.estimator_model import EXP_OUTCOME_COMPONENT, PROPENSITY_COMPONENT
 
 
 def tally_parameters(model):
@@ -38,7 +38,7 @@ def check_save_model_path(save_model):
         os.makedirs(model_dirname)
 
 
-def validation(val_batches, model, loss_func)
+def validation(val_batches, model, loss_func):
     model.eval()
 
     valid_loss = 0.0
@@ -61,22 +61,11 @@ def train(args):
         args (argparse.ArgumentParser)
     """
     #Load the data
-    logging.info("\nLoading Vocab")
+    logging.info("Loading Vocab")
     evocab = du.load_vocab(args.evocab)
     tvocab = du.load_vocab(args.tvocab)
     logging.info("Event Vocab Loaded, Size {}".format(len(evocab.stoi.keys())))
     logging.info("Text Vocab Loaded, Size {}".format(len(tvocab.stoi.keys())))
-
-
-    logging.info("Loading Datasets")
-    train_dataset = du.InstanceDataset(args.train_data, evocab, tvocab) 
-    valid_dataset = du.InstanceDataset(args.valid_data, evocab, tvocab)
-    logging.info("Finished Loading Dataset {} examples".format(len(train_dataset)))
-
-    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=-1)
-    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=-1)
-    train_data_len = len(train_dataset)
-    valid_data_len = len(valid_dataset)
 
     if args.load_model:
         logging.info("Loading the Model")
@@ -93,6 +82,23 @@ def train(args):
         logging.info("Creating the optimizer anew")
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    logging.info("Loading Datasets")
+    min_size = model.text_encoder.largest_ngram_size #Add extra pads if text size smaller than largest CNN kernel size
+    train_dataset = du.InstanceDataset(args.train_data, evocab, tvocab, min_size=min_size) 
+    valid_dataset = du.InstanceDataset(args.valid_data, evocab, tvocab, min_size=min_size)
+
+    #Remove UNK events from the e1prev_intext attribute so they don't mess up avg encoders
+  #  train_dataset.filter_examples(['e1prev_intext'])  #These take really long time! Will have to figure something out...
+  #  valid_dataset.filter_examples(['e1prev_intext'])
+    logging.info("Finished Loading Training Dataset {} examples".format(len(train_dataset)))
+    logging.info("Finished Loading Valid Dataset {} examples".format(len(valid_dataset)))
+
+    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=-1)
+    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=-1)
+    train_data_len = len(train_dataset)
+    valid_data_len = len(valid_dataset)
+
+
     loss_func = nn.CrossEntropyLoss()
 
     start_time = time.time() #start of epoch 1
@@ -101,6 +107,7 @@ def train(args):
 
     #MAIN TRAINING LOOP
     for curr_epoch in range(args.epochs):
+        prev_losses = []
         for iteration, instance in enumerate(train_batches): 
             model.train()
             model.zero_grad()
@@ -114,31 +121,38 @@ def train(args):
             torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
             optimizer.step() 
 
+            prev_losses.append(loss.data)
+            prev_losses = prev_losses[-50:]
+
+            if (iteration % args.log_every == 0) and iteration != 0:
+                past_50_avg = sum(prev_losses) / len(prev_losses)
+                logging.info("Epoch/iteration {}/{}, Past 50 Average Loss {}, Best Val {} at Epoch {}".format(curr_epoch, iteration, past_50_avg, 'NA' if best_valid_loss == float('inf') else best_valid_loss, 'NA' if best_epoch == args.epochs else best_epoch))
+
             if (iteration % args.validate_after == 0) and iteration != 0:
-                logging.info("\nRunning Validation at Epoch/iteration {}/{}".format(curr_epoch, iteration))
+                logging.info("Running Validation at Epoch/iteration {}/{}".format(curr_epoch, iteration))
                 new_valid_loss = validation(valid_batches, model, loss_func)
-                logging.info("\nValidation loss at Epoch/iteration {}/{}:{:.2f} - Best Validation Loss: {:.2f}".format(curr_epoch, iteration, new_valid_loss, best_valid_loss))
+                logging.info("Validation loss at Epoch/iteration {}/{}: {:.3f} - Best Validation Loss: {:.3f}".format(curr_epoch, iteration, new_valid_loss, best_valid_loss))
                 if new_valid_loss < best_valid_loss:
                     logging.info("New Validation Best...Saving Model Checkpoint")  
                     best_valid_loss = new_valid_loss
                     best_epoch = curr_epoch
-                    torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, float(valid_loss[0])))
-                    torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, float(valid_loss[0])))
+                    torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
+                    torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
 
         #END OF EPOCH
-        logging.info("\nEnd of Epoch {}, Running Validation".format(curr_epoch))
+        logging.info("End of Epoch {}, Running Validation".format(curr_epoch))
         new_valid_loss = validation(valid_batches, model, loss_func)
-        logging.info("\nValidation loss at end of Epoch {}:{:.2f} - Best Validation Loss: {:.2f}".format(curr_epoch, new_valid_loss, best_valid_loss))
+        logging.info("Validation loss at end of Epoch {}: {:.3f} - Best Validation Loss: {:.3f}".format(curr_epoch, new_valid_loss, best_valid_loss))
         if new_valid_loss < best_valid_loss:
             logging.info("New Validation Best...Saving Model Checkpoint")  
             best_valid_loss = new_valid_loss
             best_epoch = curr_epoch
-            torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, float(valid_loss[0])))
-            torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, float(valid_loss[0])))
+            torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
+            torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
 
         if curr_epoch - best_epoch >= args.stop_after:
-            logging.info("\nNo improvement in {} epochs, terminating at epoch {}...".format(args.stop_after, curr_epoch))
-            logging.info("\nBest Validation Loss: {:.2f} at Epoch {}".format(best_valid_loss, best_epoch))
+            logging.info("No improvement in {} epochs, terminating at epoch {}...".format(args.stop_after, curr_epoch))
+            logging.info("Best Validation Loss: {:.2f} at Epoch {}".format(best_valid_loss, best_epoch))
             break
 
              
@@ -149,8 +163,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DAVAE')
     parser.add_argument('--train_data', type=str)
     parser.add_argument('--valid_data', type=str)
-    parser.add_argument('--evocab', type=str, help='the event vocabulary pickle file')
-    parser.add_argument('--tvocab', type=str, help='the text vocabulary pickle file')
+    parser.add_argument('--evocab', type=str, help='the event vocabulary pickle file', default='/home/nweber/CausalScripts/data/evocab_freq25')
+    parser.add_argument('--tvocab', type=str, help='the text vocabulary pickle file', default='/home/nweber/CausalScripts/data/tvocab_freq100')
     parser.add_argument('--event_embed_size', type=int, default=32, help='size of event embeddings')
     parser.add_argument('--text_embed_size', type=int, default=32, help='size of text embeddings')
     parser.add_argument('--text_enc_output', type=int, default=32, help='size of output of text encoder')

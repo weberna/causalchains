@@ -12,6 +12,7 @@ import numpy as np
 import math 
 import causalchains.models.conditional_models as cmodels
 from causalchains.models.encoders.cnn_encoder import CnnEncoder
+from causalchains.models.encoders.average_encoder import AverageEncoder
 from causalchains.utils.data_utils import PAD_TOK
 
 
@@ -37,9 +38,7 @@ class Estimator(nn.Module):
         self.text_embeddings = nn.Embedding(tvocab_size, self.text_embed_size, padding_idx=t_pad)
 
         if self.event_encoder_outsize is not None: 
-            self.event_encoder = CnnEncoder(self.event_embed_size, 
-                                             num_filters = self.event_embed_size,
-                                             output_dim = self.event_encoder_outsize)
+            self.event_encoder = AverageEncoder(self.event_embed_size)
         else:
             self.event_encoder = None
 
@@ -59,6 +58,7 @@ class Estimator(nn.Module):
                     .e1, Tensor [batch]
                     .e2, Tensor [batch]
                     .e1_text, Tensor [batch, max_size]
+                    .e1prev_intext, Tensor[batch, max_size2]
         Outputs:
             (dictonary) Output Dictionary: A dictonary mapping a component name to the logit outputs of each 
             component (for example, expected_outcome -> logits outpus of expected outcome)
@@ -70,7 +70,7 @@ class Estimator(nn.Module):
 
 
 class NaiveAdjustmentEstimator(Estimator):
-    'Estimate ACE with Backdoor adjustment without considering M'
+    'Estimate ACE with Backdoor adjustment without considering any previous events'
     def __init__(self, config, evocab, tvocab):
         super(NaiveAdjustmentEstimator, self).__init__(config.event_embed_size, 
                                                        config.text_embed_size,
@@ -78,16 +78,41 @@ class NaiveAdjustmentEstimator(Estimator):
                                                        text_encoder_outsize=config.text_enc_output,
                                                        evocab=evocab, tvocab=tvocab)
 
-        self.expected_outcome = cmodels.ExpectedOutcomeNaive(self.event_embeddings, 
+        self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
                                                              self.text_embeddings, 
-                                                             self.text_encoder,
-                                                             config.mlp_hidden_dim)
+                                                             event_encoder=None,
+                                                             text_encoder=self.text_encoder,
+                                                             hidden_dim=config.mlp_hidden_dim)
+
+        assert not self.expected_outcome.includes_e1prev_intext()
 
 
     def forward(self, instance):
         exp_out = self.expected_outcome(instance)
         return {EXP_OUTCOME_COMPONENT: exp_out}
         
+
+class SemiNaiveAdjustmentEstimator(Estimator):
+    'Estimate ACE with Backdoor adjustment considering previous events that occured in text (but not those that didnt'
+    def __init__(self, config, evocab, tvocab):
+        super(NaiveAdjustmentEstimator, self).__init__(config.event_embed_size, 
+                                                       config.text_embed_size,
+                                                       event_encoder_outsize=config.event_embed_size,
+                                                       text_encoder_outsize=config.text_enc_output,
+                                                       evocab=evocab, tvocab=tvocab)
+
+        self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
+                                                             self.text_embeddings, 
+                                                             event_encoder=self.event_encoder,
+                                                             text_encoder=self.text_encoder,
+                                                             hidden_dim=config.mlp_hidden_dim)
+
+
+        assert self.expected_outcome.includes_e1prev_intext()
+
+    def forward(self, instance):
+        exp_out = self.expected_outcome(instance)
+        return {EXP_OUTCOME_COMPONENT: exp_out}
 
 
 

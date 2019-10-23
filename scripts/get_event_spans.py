@@ -52,7 +52,7 @@ def concat_single_chunk(json_chunk_list): #Convert a list of sentential json obj
     return outdict
             
 
-def convert_to_train(concat_chunk, include_context=False, max_context_size=10): #convert a single connll chunk (output of concat_single_chunk) into individual training instances
+def convert_to_train(concat_chunk, file_id, include_context=False, max_context_size=10): #convert a single connll chunk (output of concat_single_chunk) into individual training instances
     instances = []
     for i in range(len(concat_chunk['event_chain'])-1):
         event_1 = concat_chunk['event_chain'][i]
@@ -62,7 +62,7 @@ def convert_to_train(concat_chunk, include_context=False, max_context_size=10): 
         event_prev_text = concat_chunk['event_chain'][:i][-max_context_size:] if include_context else [] #only take previous max_context_size
         event_prev_text_nodup = [i for n, i in enumerate(event_prev_text) if i not in event_prev_text[:n]] #remove duplicates
 
-        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1, 'e1prev_intext':event_prev_text_nodup})
+        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1, 'e1prev_intext':event_prev_text_nodup, 'id':file_id+str(i)})
     return instances
         
 
@@ -77,9 +77,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-#    decompdir = sys.argv[1].rstrip("/")
-#    conlldir= sys.argv[2].rstrip("/")
-#    outfile = sys.argv[3]
     decompdir = args.decompdir.rstrip("/")
     conlldir= args.conlldir.rstrip("/")
     outfile = args.outfile
@@ -88,6 +85,7 @@ if __name__ == "__main__":
 
     num_books = len(os.listdir(decompdir))
     num_processed = 0
+    num_skipped = 0
 
     for decompfi in os.listdir(decompdir): #For each book
         decompfile = os.path.join(decompdir, decompfi)
@@ -95,7 +93,8 @@ if __name__ == "__main__":
             decomp_lines = decomp_fi.readlines()
    
         currgenre, currbook = parse_decomp_filename(decompfile)
-        print("Processing {} of Genre: {}, Progress {}/{} ({} %)".format(currbook, currgenre, num_processed, num_books, num_processed/(num_books*1.0)))
+        print("Processing {} of Genre: {}, Progress {}/{} ({} %), Num Skipped: {}".format(currbook, currgenre, num_processed, num_books, num_processed/(num_books*1.0), num_skipped))
+        
         decomp_lines_json = [json.loads(x) for x in decomp_lines]
 
         book_conll_files = [fi for fi in os.listdir(conlldir) if parse_conll_filename(fi)[1][0] == currbook]
@@ -107,6 +106,7 @@ if __name__ == "__main__":
             decomp_lines_json_chunk = [x for x in decomp_lines_json if x['doc-id']==doc_id] #get the lines associated with this chunk
             line_idx = 0 #Where we are in the decomp json file
 
+            valid_instance = True
             for sent_id, parse in conll_iter:
                 sent_id = int(sent_id.split('_')[1])
 
@@ -119,30 +119,32 @@ if __name__ == "__main__":
                     pred_heads = json_line['predicate-head-idxs']
                     event_text = []
                     for head in pred_heads:
-                        if head < len(ppat.tokens):
+                        if head < len(ppat.tokens) and ppat.tokens[head] in ppat.event_dict.keys():
                             predicate = ppat.event_dict[ppat.tokens[head]]
                             pred_text = predpatt2text(predicate)
                             event_text.append(pred_text)
+                        else:
+                            valid_instance = False
+                            num_skipped += 1
                     json_line['event_text'] = event_text
                     json_line['sprl-predictions'] = []
                     line_idx += 1
                         
-    
-#    print(list(zip(*concat_single_chunk(decomp_lines_json_chunk).values())))
-            instances = convert_to_train(concat_single_chunk(decomp_lines_json_chunk), include_context=args.include_context, max_context_size=args.max_context_size)
+            
+            if valid_instance: #Write instances for this chunk
+                file_id = genre + "-" + book[0] + "-" + doc_id + "_"
+                instances = convert_to_train(concat_single_chunk(decomp_lines_json_chunk), file_id, include_context=args.include_context, max_context_size=args.max_context_size)
 
-            for inst in instances:
-                json.dump(inst, output_writer)
-                output_writer.write('\n')
+                for inst in instances:
+                    json.dump(inst, output_writer)
+                    output_writer.write('\n')
+            else:
+                print("Skipping due to PredPatt Error")
 
-        num_processed +=1
+        num_processed +=1  #finished processing book
 
     output_writer.close()
     
-#    for line in decomp_lines_json_chunk:
-#        json.dump(line, output_writer)
-#        output_writer.write('\n')
-#    output_writer.close()
 
 
             

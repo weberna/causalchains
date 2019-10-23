@@ -112,18 +112,29 @@ class ExtendableField(ttdata.Field):
 class InstanceDataset(ttdata.Dataset):
     'Dataset for a single training instance (event 1, event 2, text, other events)'
 
-    def __init__(self, path, event_vocab, text_vocab):
+    def __init__(self, path, event_vocab, text_vocab, min_size=5, filter_unk_events=True):
 
         """
         Args
             path (str) : Filename of text file with dataset
             vocab (Torchtext Vocab object)
+            filter_unk_events (bool) : Remove instances where either e1 or e2 are unk
+            min_size : the minimum size of text fields, pad to this size if it is not larger
         """
-        e1_text = ExtendableField(text_vocab, include_lengths=True)
+        def pad_to_size(arr, voc): #Add extra pads if the length is still less than min length
+            #This is computed after padding and after numericalize
+            for b in arr:
+                if len(b) < min_size:
+                    rem = min_size - len(b)
+                    b.extend([voc.stoi[PAD_TOK]]*rem)
+            return arr
+
+        e1_text = ExtendableField(text_vocab, sequential=True, include_lengths=True, postprocessing=pad_to_size)
         e1 = ExtendableField(event_vocab, sequential=False)
         e2 = ExtendableField(event_vocab, sequential=False)
+        e1prev_intext = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Bag of previous events in text
 
-        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2)]
+        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext)]
         examples = []
         with open(path, 'r') as f:
             for line in f:
@@ -131,9 +142,14 @@ class InstanceDataset(ttdata.Dataset):
                 e1_text_data = json_line['e1_text'].lower()
                 e1_data = json_line['e1']
                 e2_data = json_line['e2']
+                e1prev_intext_data = json_line['e1prev_intext']
 
-                examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data], fields))
+                examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data], fields))
 
+        if not filter_unk_events:
+            filter_pred = None
+        else:
+            filter_pred = lambda inst: inst.e1 in event_vocab.stoi and inst.e2 in event_vocab.stoi
  
-        super(InstanceDataset, self).__init__(examples, fields)
+        super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)
 
