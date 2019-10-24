@@ -30,19 +30,12 @@ def query_cn(query):
     time.sleep(1.0) #So we don't get kicked out
     return obj.json()
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--vocab', type=str, help='Directory with decomp event json files' )
-    parser.add_argument('--outfile', type=str)
-    args = parser.parse_args()
-
+def query_main(args):
+    print("QUERYING CONCEPT NET")
     evocab = load_vocab(args.vocab)
     verbs = [x.split('->')[0] for x in evocab.itos[2:] if x.split('->')[1] in ['nsubj', 'dobj'] and len(x.split('->')) ==2]
     verbs = [i for n, i in enumerate(verbs) if i not in verbs[:n]] #remove duplicates
 
-    verbs=verbs[200:300] #TESTING
-        
     output_writer = open(args.outfile, 'w')
 
     for i, v in enumerate(verbs):
@@ -51,7 +44,6 @@ if __name__ == "__main__":
         causes_query=URL + END + v + '&' + CAUSES
         prereq_query=URL + START + v + '&' + PREREQ
         causes_desire_query=URL + END + v + '&' + CAUSE_DESIRE
-        subevent_query = URL + ANY + v + '&' + SUBEVENT
 
         causes_res=query_cn(causes_query)
         json.dump(causes_res, output_writer)
@@ -65,27 +57,61 @@ if __name__ == "__main__":
         json.dump(causes_des_res, output_writer)
         output_writer.write('\n')
       
-        subevent_res=query_cn(subevent_query)
-        json.dump(subevent_res, output_writer)
-        output_writer.write('\n')
 
-
-
-
-
-
-
-
-
-
-#        num_processed +=1
-
-#    output_writer.close()
-    
-#    for line in decomp_lines_json_chunk:
-#        json.dump(line, output_writer)
-#        output_writer.write('\n')
     output_writer.close()
+
+def convert_main(args):
+    print("CONVERTING TO REQUIRED JSON")
+    with open(args.vocab, 'r') as fi:
+        queries = fi.readlines()
+    queries = [json.loads(x) for x in queries]
+
+    event_dict = {}
+    for query_result in queries:
+        query = query_result['@id'].split('?')[1]
+        print(query)
+        query_1 = query.split('&')[0]
+        query_2 = query.split('&')[1]
+        if query_1.split('=')[0] == 'rel':
+            rel = query_1.split('/')[-1]
+            predicate = query_2.split('/')[-1]
+        else:
+            predicate = query_1.split('/')[-1]
+            rel = query_2.split('/')[-1]
+
+
+        assert rel in ['Causes', 'HasPrerequisite', 'CausesDesire']
+        if predicate not in event_dict:
+            event_dict[predicate] = []
+
+        if rel == 'Causes' or rel == 'CausesDesire': #for these relations, look at start node
+            othernode = 'start'
+        elif rel == 'HasPrerequisite': #for this relation, look at end node
+            othernode = 'end'
+
+        for edge in query_result['edges']:
+            node = edge[othernode]
+            label = " ".join(node['term'].split('/')[-1].split("_"))
+            event_dict[predicate].append((label, edge['weight']))
+
+    with open(args.outfile, 'w') as fi:
+        json.dump(event_dict, fi)
+
+            
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--vocab', type=str, help='Vocab if --query is on, ELSE, use for the inputfile, for converting results to new JSON format' )
+    parser.add_argument('--outfile', type=str)
+    parser.add_argument('--query', action='store_true')
+    args = parser.parse_args()
+
+    if args.query:
+        query_main(args)
+    else:
+        convert_main(args)
+
 
 
             
