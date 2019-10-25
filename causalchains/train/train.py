@@ -38,15 +38,16 @@ def check_save_model_path(save_model):
         os.makedirs(model_dirname)
 
 
-def validation(val_batches, model, loss_func):
+def validation(args, val_batches, model, loss_func):
     model.eval()
 
     valid_loss = 0.0
-    for v_iteration, instance in enumerate(val_batches):
+    for v_iteration, inst in enumerate(val_batches):
+        instance = inst.to(args.device)
         model_outputs = model(instance) 
         exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
         exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
-        loss = exp_outcome_loss
+        loss = exp_outcome_loss.cpu()
 
         valid_loss += loss
   
@@ -74,6 +75,8 @@ def train(args):
         logging.info("Creating the Model")
         model = estimators.NaiveAdjustmentEstimator(args, evocab, tvocab)
 
+    model = model.to(device=args.device)
+
     #create the optimizer
     if args.load_opt:
         logging.info("Loading the optimizer state")
@@ -93,8 +96,8 @@ def train(args):
     logging.info("Finished Loading Training Dataset {} examples".format(len(train_dataset)))
     logging.info("Finished Loading Valid Dataset {} examples".format(len(valid_dataset)))
 
-    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=-1)
-    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=-1)
+    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=None)
+    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=None)
     train_data_len = len(train_dataset)
     valid_data_len = len(valid_dataset)
 
@@ -108,7 +111,8 @@ def train(args):
     #MAIN TRAINING LOOP
     for curr_epoch in range(args.epochs):
         prev_losses = []
-        for iteration, instance in enumerate(train_batches): 
+        for iteration, inst in enumerate(train_batches): 
+            instance = inst.to(device)
             model.train()
             model.zero_grad()
             model_outputs = model(instance) 
@@ -121,7 +125,7 @@ def train(args):
             torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
             optimizer.step() 
 
-            prev_losses.append(loss.data)
+            prev_losses.append(loss.cpu().data)
             prev_losses = prev_losses[-50:]
 
             if (iteration % args.log_every == 0) and iteration != 0:
@@ -130,7 +134,7 @@ def train(args):
 
             if (iteration % args.validate_after == 0) and iteration != 0:
                 logging.info("Running Validation at Epoch/iteration {}/{}".format(curr_epoch, iteration))
-                new_valid_loss = validation(valid_batches, model, loss_func)
+                new_valid_loss = validation(args, valid_batches, model, loss_func)
                 logging.info("Validation loss at Epoch/iteration {}/{}: {:.3f} - Best Validation Loss: {:.3f}".format(curr_epoch, iteration, new_valid_loss, best_valid_loss))
                 if new_valid_loss < best_valid_loss:
                     logging.info("New Validation Best...Saving Model Checkpoint")  
@@ -141,7 +145,7 @@ def train(args):
 
         #END OF EPOCH
         logging.info("End of Epoch {}, Running Validation".format(curr_epoch))
-        new_valid_loss = validation(valid_batches, model, loss_func)
+        new_valid_loss = validation(args, valid_batches, model, loss_func)
         logging.info("Validation loss at end of Epoch {}: {:.3f} - Best Validation Loss: {:.3f}".format(curr_epoch, new_valid_loss, best_valid_loss))
         if new_valid_loss < best_valid_loss:
             logging.info("New Validation Best...Saving Model Checkpoint")  
@@ -187,6 +191,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
     args = parser.parse_args()
+    args.device=None
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -198,8 +203,14 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         if not args.cuda:
             logging.warning("WARNING: You have a CUDA device, so you should probably run with --cuda")
+            args.device = torch.device('cpu')
         else:
             torch.cuda.manual_seed(args.seed)
+            args.device = torch.device('cuda')
+
+    else:
+        args.device = torch.device('cpu')
+    
 
     train(args)
 

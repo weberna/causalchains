@@ -153,3 +153,24 @@ class InstanceDataset(ttdata.Dataset):
  
         super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)
 
+
+    def example_to_batch(self, example):
+        """
+        Convert a single InstanceDataset example into a Batch object that can be directly 
+        fed into the model. Useful for interactive testing of the model
+        """
+        return ttdata.Batch([example], self)
+
+    def print_example(self, example, print_out=False):
+        output = "e1: {} | e1 text: {} | Previous events: {} | e2: {}".format(example.e1,
+                                                                           " ".join(example.e1_text),
+                                                                           example.e1prev_intext,
+                                                                           example.e2)
+
+        if print_out:
+            print(output)
+        return output
+
+
+
+
