@@ -17,6 +17,7 @@ import torchtext.data as ttdata
 import torchtext.datasets as ttdatasets
 from torchtext.vocab import Vocab
 from collections import defaultdict, Counter
+import logging
 
 #Reserved Special Tokens
 PAD_TOK = "<pad>"
@@ -109,10 +110,31 @@ class ExtendableField(ttdata.Field):
         raise NotImplementedError
 
 
+def send_instance_to(instance, device):
+    """
+    Convert Batch object so that it goes on device(gpu/cpu)
+    """
+    instance.e1_text = (instance.e1_text[0].to(device=device), instance.e1_text[1].to(device=device))
+    instance.e1 = instance.e1.to(device=device)
+    instance.e2 = instance.e2.to(device=device)
+    instance.e1prev_intext= (instance.e1prev_intext[0].to(device=device), instance.e1prev_intext[1].to(device=device))
+    return instance
+
+def create_mask(instance, lengths):
+    """
+    Param: 
+        Tensor instance (batch x maxlen)
+        Tensor lengths (batch)
+    """
+    mask = torch.arange(instance.shape[1]).expand(lengths.shape[0], instance.shape[1]) < lengths.cpu().unsqueeze(dim=1)
+    mask = mask.float().to(device=instance.device)
+
+    return mask
+
 class InstanceDataset(ttdata.Dataset):
     'Dataset for a single training instance (event 1, event 2, text, other events)'
 
-    def __init__(self, path, event_vocab, text_vocab, min_size=5, filter_unk_events=True):
+    def __init__(self, path, event_vocab, text_vocab, min_size=5, pickled_examples=None, filter_unk_events=True):
 
         """
         Args
@@ -136,30 +158,43 @@ class InstanceDataset(ttdata.Dataset):
 
         fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext)]
         examples = []
-        with open(path, 'r') as f:
-            for line in f:
-                json_line = json.loads(line)
-                e1_text_data = json_line['e1_text'].lower()
-                e1_data = json_line['e1']
-                e2_data = json_line['e2']
-                e1prev_intext_data = json_line['e1prev_intext']
-
-                examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data], fields))
 
         if not filter_unk_events:
             filter_pred = None
         else:
             filter_pred = lambda inst: inst.e1 in event_vocab.stoi and inst.e2 in event_vocab.stoi
- 
-        super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)
 
 
-    def example_to_batch(self, example):
+        if pickled_examples is not None:
+            super(InstanceDataset, self).__init__(pickled_examples, fields, filter_pred=None) #assume already filter, no reason to do filtering again
+
+        else:
+            with open(path, 'r') as f:
+                for line in f:
+                    json_line = json.loads(line)
+                    e1_text_data = json_line['e1_text'].lower()
+                    e1_data = json_line['e1']
+                    e2_data = json_line['e2']
+                    e1prev_intext_data = json_line['e1prev_intext']
+
+                    examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data], fields))
+
+     
+            super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)
+
+
+    def example_to_batch(self, example, device=None, multiple=False):
         """
         Convert a single InstanceDataset example into a Batch object that can be directly 
         fed into the model. Useful for interactive testing of the model
         """
-        return ttdata.Batch([example], self)
+        if not multiple:
+            example = [example]
+
+        if device is None:
+            return ttdata.Batch(example, self)
+        else:
+            return send_instance_to(ttdata.Batch(example, self), device)
 
     def print_example(self, example, print_out=False):
         output = "e1: {} | e1 text: {} | Previous events: {} | e2: {}".format(example.e1,

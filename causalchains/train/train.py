@@ -42,14 +42,15 @@ def validation(args, val_batches, model, loss_func):
     model.eval()
 
     valid_loss = 0.0
-    for v_iteration, inst in enumerate(val_batches):
-        instance = inst.to(args.device)
-        model_outputs = model(instance) 
-        exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
-        exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
-        loss = exp_outcome_loss.cpu()
+    with torch.no_grad():
+        for v_iteration, inst in enumerate(val_batches):
+            instance = du.send_instance_to(inst, args.device)
+            model_outputs = model(instance) 
+            exp_outcome_out = model_outputs[EXP_OUTCOME_COMPONENT]  #[batch X num events], output predication for e2
+            exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
+            loss = exp_outcome_loss.cpu()
 
-        valid_loss += loss
+            valid_loss += loss
   
     valid_loss = valid_loss/(v_iteration+1)   
     return valid_loss
@@ -68,12 +69,22 @@ def train(args):
     logging.info("Event Vocab Loaded, Size {}".format(len(evocab.stoi.keys())))
     logging.info("Text Vocab Loaded, Size {}".format(len(tvocab.stoi.keys())))
 
+    if args.use_pretrained:
+        pretrained = Glove(name='6B', dim=args.text_embed_size, unk_init=torch.Tensor.normal_)
+        tvocab = du.load_vectors(pretrained)
+        logging.info("Loaded Pretrained Word Embeddings")
+
     if args.load_model:
         logging.info("Loading the Model")
         model = torch.load(args.load_model)
     else:
         logging.info("Creating the Model")
-        model = estimators.NaiveAdjustmentEstimator(args, evocab, tvocab)
+        if args.onehot_events:
+            logging.info("Model Type: SemiNaiveAdjustmentEstimatorOneHotEvents")
+            model = estimators.SemiNaiveAdjustmentEstimatorOneHotEvents(args, evocab, tvocab)
+        else:
+            logging.info("Model Type: SemiNaiveAdjustmentEstimator")
+            model = estimators.SemiNaiveAdjustmentEstimator(args, evocab, tvocab)
 
     model = model.to(device=args.device)
 
@@ -84,10 +95,18 @@ def train(args):
     else:
         logging.info("Creating the optimizer anew")
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+      #  optimizer = torch.optim.Adagrad(model.parameters(), lr=args.lr)
 
     logging.info("Loading Datasets")
     min_size = model.text_encoder.largest_ngram_size #Add extra pads if text size smaller than largest CNN kernel size
-    train_dataset = du.InstanceDataset(args.train_data, evocab, tvocab, min_size=min_size) 
+
+    if args.load_pickle:
+        logging.info("Loading Train from Pickled Data")
+        with open(args.train_data, 'rb') as pfi:
+            pickled_examples = pickle.load(pfi)
+        train_dataset = du.InstanceDataset("", evocab, tvocab, min_size=min_size, pickled_examples=pickled_examples) 
+    else:
+        train_dataset = du.InstanceDataset(args.train_data, evocab, tvocab, min_size=min_size) 
     valid_dataset = du.InstanceDataset(args.valid_data, evocab, tvocab, min_size=min_size)
 
     #Remove UNK events from the e1prev_intext attribute so they don't mess up avg encoders
@@ -112,7 +131,8 @@ def train(args):
     for curr_epoch in range(args.epochs):
         prev_losses = []
         for iteration, inst in enumerate(train_batches): 
-            instance = inst.to(device)
+            instance = du.send_instance_to(inst, args.device)
+
             model.train()
             model.zero_grad()
             model_outputs = model(instance) 
@@ -140,8 +160,10 @@ def train(args):
                     logging.info("New Validation Best...Saving Model Checkpoint")  
                     best_valid_loss = new_valid_loss
                     best_epoch = curr_epoch
-                    torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
-                    torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
+                    #torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
+                    #torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
+                    torch.save(model, "{}".format(args.save_model))
+                    torch.save(optimizer, "{}_optimizer".format(args.save_model))
 
         #END OF EPOCH
         logging.info("End of Epoch {}, Running Validation".format(curr_epoch))
@@ -151,8 +173,10 @@ def train(args):
             logging.info("New Validation Best...Saving Model Checkpoint")  
             best_valid_loss = new_valid_loss
             best_epoch = curr_epoch
-            torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
-            torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
+            #torch.save(model, "{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, curr_epoch, best_valid_loss))
+            #torch.save(optimizer, "{}.{}.epoch_{}.loss_{:.2f}.pt".format(args.save_model, "optimizer", curr_epoch, best_valid_loss))
+            torch.save(model, "{}".format(args.save_model))
+            torch.save(optimizer, "{}_optimizer".format(args.save_model))
 
         if curr_epoch - best_epoch >= args.stop_after:
             logging.info("No improvement in {} epochs, terminating at epoch {}...".format(args.stop_after, curr_epoch))
@@ -164,29 +188,32 @@ def train(args):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='DAVAE')
+    parser = argparse.ArgumentParser(description='Training for Nuisance Conditionals')
     parser.add_argument('--train_data', type=str)
     parser.add_argument('--valid_data', type=str)
-    parser.add_argument('--evocab', type=str, help='the event vocabulary pickle file', default='/home/nweber/CausalScripts/data/evocab_freq25')
-    parser.add_argument('--tvocab', type=str, help='the text vocabulary pickle file', default='/home/nweber/CausalScripts/data/tvocab_freq100')
-    parser.add_argument('--event_embed_size', type=int, default=32, help='size of event embeddings')
-    parser.add_argument('--text_embed_size', type=int, default=32, help='size of text embeddings')
-    parser.add_argument('--text_enc_output', type=int, default=32, help='size of output of text encoder')
-    parser.add_argument('--mlp_hidden_dim', type=int, default=32, help='size of mlp hidden layer for component models')
+    parser.add_argument('--evocab', type=str, help='the event vocabulary pickle file', default='./data/evocab_freq25')
+    parser.add_argument('--tvocab', type=str, help='the text vocabulary pickle file', default='./data/tvocab_freq100')
+    parser.add_argument('--event_embed_size', type=int, default=128, help='size of event embeddings')
+    parser.add_argument('--text_embed_size', type=int, default=128, help='size of text embeddings')
+    parser.add_argument('--text_enc_output', type=int, default=128, help='size of output of text encoder')
+    parser.add_argument('--mlp_hidden_dim', type=int, default=300, help='size of mlp hidden layer for component models')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')
-    parser.add_argument('--log_every', type=int, default=200)
-    parser.add_argument('--save_after', type=int, default=500)
-    parser.add_argument('--validate_after', type=int, default=2500)
+    parser.add_argument('--log_every', type=int, default=500)
+    parser.add_argument('--validate_after', type=int, default=5000)
     parser.add_argument('--optimizer', type=str, default='adam', help='adam, adagrad, sgd')
-    parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
+    parser.add_argument('--clip', type=float, default=10.0, help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=40, help='upper epoch limit')
-    parser.add_argument('--stop_after', type=int, default=2, help='Stop after this many epochs have passed without decrease in validation loss')
+    parser.add_argument('--stop_after', type=int, default=3, help='Stop after this many epochs have passed without decrease in validation loss')
     parser.add_argument('--batch_size', type=int, default=32, metavar='N', help='batch size')
     parser.add_argument('--seed', type=int, default=11, help='random seed') 
     parser.add_argument('--cuda', action='store_true', help='use CUDA')
     parser.add_argument('-save_model', default='model_checkpoint.pt', help="""Model filename""")
     parser.add_argument('--load_model', type=str)
     parser.add_argument('--load_opt', type=str)
+    parser.add_argument('--onehot_events', action='store_true', help='Dont embed events for input, just use onehot features')
+    parser.add_argument('--combine_events', action='store_true', help='Combine e1 with previous context (average it in if using embeddings)')
+    parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained glove embeddings')
+    parser.add_argument('--load_pickle', action='store_true', help='Load preprocessed (pickled) examples, is quicker')
 
 
     logging.basicConfig(level=logging.INFO)
@@ -207,6 +234,8 @@ if __name__ == "__main__":
         else:
             torch.cuda.manual_seed(args.seed)
             args.device = torch.device('cuda')
+
+            logging.info("Using GPU {}".format(torch.cuda.get_device_name(args.device)))
 
     else:
         args.device = torch.device('cpu')

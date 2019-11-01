@@ -13,7 +13,9 @@ import math
 import causalchains.models.conditional_models as cmodels
 from causalchains.models.encoders.cnn_encoder import CnnEncoder
 from causalchains.models.encoders.average_encoder import AverageEncoder
+from causalchains.models.encoders.onehot_encoder import OneHotEncoder
 from causalchains.utils.data_utils import PAD_TOK
+import logging
 
 
 EXP_OUTCOME_COMPONENT="_exp_outcome_component_"
@@ -21,8 +23,10 @@ PROPENSITY_COMPONENT="_propensity_component_"
 
 
 class Estimator(nn.Module):
-    def __init__(self, event_embed_size, text_embed_size, event_encoder_outsize, text_encoder_outsize, evocab, tvocab):
+    def __init__(self, event_embed_size, text_embed_size, event_encoder_outsize, text_encoder_outsize, evocab, tvocab, config):
         super(Estimator, self).__init__()
+
+        #Pass in None for event_embed_size to just use one hot encodings for events (make sure event_encoder_outsize is the correct size)
 
         self.event_embed_size = event_embed_size
         self.text_embed_size = text_embed_size
@@ -34,11 +38,22 @@ class Estimator(nn.Module):
         e_pad = evocab.stoi[PAD_TOK]
         t_pad = tvocab.stoi[PAD_TOK]
 
-        self.event_embeddings = nn.Embedding(evocab_size, self.event_embed_size, padding_idx=e_pad)
+        if self.event_embed_size is not None:
+            self.event_embeddings = nn.Embedding(evocab_size, self.event_embed_size, padding_idx=e_pad)
+        else:
+            self.event_embeddings = None
+
         self.text_embeddings = nn.Embedding(tvocab_size, self.text_embed_size, padding_idx=t_pad)
+        if config.use_pretrained:
+            logging.info("Estimator: Using Pretrained Word Embeddings")
+            self.text_embeddings.weight.data = tvocab.vectors
 
         if self.event_encoder_outsize is not None: 
-            self.event_encoder = AverageEncoder(self.event_embed_size)
+            if self.event_embed_size is not None:
+                self.event_encoder = AverageEncoder(self.event_embed_size)
+            else: 
+                assert event_encoder_outsize == len(evocab.itos), "event_encoder_outsize incorrectly specified for OneHot, should be vocab size"
+                self.event_encoder = OneHotEncoder(len(evocab.itos), pad_idx=e_pad)
         else:
             self.event_encoder = None
 
@@ -76,16 +91,17 @@ class NaiveAdjustmentEstimator(Estimator):
                                                        config.text_embed_size,
                                                        event_encoder_outsize=None,
                                                        text_encoder_outsize=config.text_enc_output,
-                                                       evocab=evocab, tvocab=tvocab)
+                                                       evocab=evocab, tvocab=tvocab, config=config)
 
         self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
                                                              self.text_embeddings, 
                                                              event_encoder=None,
                                                              text_encoder=self.text_encoder,
-                                                             hidden_dim=config.mlp_hidden_dim)
+                                                             evocab=evocab,tvocab=tvocab,
+                                                             config=config)
 
         assert not self.expected_outcome.includes_e1prev_intext()
-
+        assert not self.expected_outcome.onehot_events()
 
     def forward(self, instance):
         exp_out = self.expected_outcome(instance)
@@ -93,27 +109,52 @@ class NaiveAdjustmentEstimator(Estimator):
         
 
 class SemiNaiveAdjustmentEstimator(Estimator):
-    'Estimate ACE with Backdoor adjustment considering previous events that occured in text (but not those that didnt'
+    'Estimate ACE with Backdoor adjustment considering previous events that occured in text (but not those that didnt appear in text)'
     def __init__(self, config, evocab, tvocab):
-        super(NaiveAdjustmentEstimator, self).__init__(config.event_embed_size, 
+        super(SemiNaiveAdjustmentEstimator, self).__init__(config.event_embed_size, 
                                                        config.text_embed_size,
                                                        event_encoder_outsize=config.event_embed_size,
                                                        text_encoder_outsize=config.text_enc_output,
-                                                       evocab=evocab, tvocab=tvocab)
+                                                       evocab=evocab, tvocab=tvocab, config=config)
 
         self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
                                                              self.text_embeddings, 
                                                              event_encoder=self.event_encoder,
                                                              text_encoder=self.text_encoder,
-                                                             hidden_dim=config.mlp_hidden_dim)
+                                                             evocab=evocab,tvocab=tvocab,
+                                                             config=config)
 
 
         assert self.expected_outcome.includes_e1prev_intext()
+        assert not self.expected_outcome.onehot_events()
 
     def forward(self, instance):
         exp_out = self.expected_outcome(instance)
         return {EXP_OUTCOME_COMPONENT: exp_out}
 
+class SemiNaiveAdjustmentEstimatorOneHotEvents(Estimator):
+    'Estimate ACE with Backdoor adjustment considering previous events that occured in text (but not those that didnt appear in text)'
+    def __init__(self, config, evocab, tvocab):
+        super(SemiNaiveAdjustmentEstimatorOneHotEvents, self).__init__(None, 
+                                                       config.text_embed_size,
+                                                       event_encoder_outsize=len(evocab.itos),
+                                                       text_encoder_outsize=config.text_enc_output,
+                                                       evocab=evocab, tvocab=tvocab, config=config)
+
+        self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
+                                                             self.text_embeddings, 
+                                                             event_encoder=self.event_encoder,
+                                                             text_encoder=self.text_encoder,
+                                                             evocab=evocab,tvocab=tvocab,
+                                                             config=config)
+
+
+        assert self.expected_outcome.includes_e1prev_intext()
+        assert self.expected_outcome.onehot_events()
+
+    def forward(self, instance):
+        exp_out = self.expected_outcome(instance)
+        return {EXP_OUTCOME_COMPONENT: exp_out}
 
 
 

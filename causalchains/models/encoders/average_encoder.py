@@ -22,11 +22,15 @@ class AverageEncoder(nn.Module):
         self._embedding_dim = self.output_dim = embedding_dim
 
 
-    def forward(self, tokens: torch.Tensor, lengths: torch.Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tokens: torch.Tensor, lengths: torch.Tensor, mask: torch.Tensor):  # pylint: disable=arguments-differ
         """
         Params:
             Tokens (Tensor[batch, maxlength, dim]) : the embeddings to avg
             lengths (Tensor[batch])
+            mask (Tensor[batch, maxleng])
         """
-        avg = torch.sum(tokens, dim=1) / lengths.view(-1, 1).type(torch.FloatTensor)
+        if mask is not None:
+            tokens = tokens * mask.unsqueeze(-1).float()
+
+        avg = torch.sum(tokens, dim=1) / (lengths.view(-1, 1).type(torch.FloatTensor).to(device=tokens.device) +1) #NEED TO CHANGE LATER
         return avg
