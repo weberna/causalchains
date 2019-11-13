@@ -35,20 +35,23 @@ def concat_single_chunk(json_chunk_list): #Convert a list of sentential json obj
     #-Non realis events
     event_chain = []
     event_texts = []
+    event_args = []
     for line in json_chunk_list:    
         events = line['syntactic-events']
         texts = line['event_text']
         fact = line['fact-predictions']
         pheads=line['predicate-head-idxs']
-        assert len(pheads) == len(texts) and len(texts) <= len(events)  #Single predicate sometimes expanded into multiple predicates, in this case, just take the first event
+        args = line['args']
+        assert len(pheads) == len(texts) and len(args) == len(texts) and len(texts) <= len(events)  #Single predicate sometimes expanded into multiple predicates, in this case, just take the first event
 
         for i in range(len(texts)):
             if fact[i] == "pos":
                 event_chain.append(events[i])
                 event_texts.append(texts[i])
+                event_args.append(args[i])
 
-    assert len(event_chain) == len(event_texts)
-    outdict = {"event_chain":event_chain, "event_texts":event_texts}
+    assert len(event_chain) == len(event_texts) == len(event_args)
+    outdict = {"event_chain":event_chain, "event_texts":event_texts, "event_args":event_args}
     return outdict
             
 
@@ -58,11 +61,12 @@ def convert_to_train(concat_chunk, file_id, include_context=False, max_context_s
         event_1 = concat_chunk['event_chain'][i]
         event_2 = concat_chunk['event_chain'][i+1]
         text_1 = concat_chunk['event_texts'][i]
+        event_1_arg = concat_chunk['event_args'][i]
 
         event_prev_text = concat_chunk['event_chain'][:i][-max_context_size:] if include_context else [] #only take previous max_context_size
         event_prev_text_nodup = [i for n, i in enumerate(event_prev_text) if i not in event_prev_text[:n]] #remove duplicates
 
-        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1, 'e1prev_intext':event_prev_text_nodup, 'id':file_id+str(i)})
+        instances.append({'e1':event_1, 'e2':event_2, 'e1_text':text_1, 'e1prev_intext':event_prev_text_nodup, 'id':file_id+str(i), 'e1arg':event_1_arg})
     return instances
         
 
@@ -117,16 +121,24 @@ if __name__ == "__main__":
                     json_line = decomp_lines_json_chunk[line_idx]
                     ppat = PredPatt(parse)
                     pred_heads = json_line['predicate-head-idxs']
+                    pred_args = json_line['pred-args']
+                    assert len(pred_heads) <= len(pred_args)
                     event_text = []
-                    for head in pred_heads:
-                        if head < len(ppat.tokens) and ppat.tokens[head] in ppat.event_dict.keys():
+                    event_args = []
+                    for idx, head in enumerate(pred_heads):
+                        head_args = [x for x in pred_args if x[0] == head]
+                        assert len(head_args) > 0
+                        head_arg_id = head_args[0][1]
+                        if head < len(ppat.tokens) and ppat.tokens[head] in ppat.event_dict.keys() and head_arg_id < len(ppat.tokens):
                             predicate = ppat.event_dict[ppat.tokens[head]]
                             pred_text = predpatt2text(predicate)
                             event_text.append(pred_text)
+                            event_args.append(ppat.tokens[head_arg_id].text)
                         else:
                             valid_instance = False
                             num_skipped += 1
                     json_line['event_text'] = event_text
+                    json_line['args'] = event_args
                     json_line['sprl-predictions'] = []
                     line_idx += 1
                         

@@ -14,6 +14,7 @@ import causalchains.models.conditional_models as cmodels
 from causalchains.models.encoders.cnn_encoder import CnnEncoder
 from causalchains.models.encoders.average_encoder import AverageEncoder
 from causalchains.models.encoders.onehot_encoder import OneHotEncoder
+from causalchains.models.encoders.rnn_encoder import RnnEncoder
 from causalchains.utils.data_utils import PAD_TOK
 import logging
 
@@ -27,6 +28,7 @@ class Estimator(nn.Module):
         super(Estimator, self).__init__()
 
         #Pass in None for event_embed_size to just use one hot encodings for events (make sure event_encoder_outsize is the correct size)
+        #Pass in None for event_encoder_outsize if not using event information
 
         self.event_embed_size = event_embed_size
         self.text_embed_size = text_embed_size
@@ -49,7 +51,10 @@ class Estimator(nn.Module):
             self.text_embeddings.weight.data = tvocab.vectors
 
         if self.event_encoder_outsize is not None: 
-            if self.event_embed_size is not None:
+            if self.event_embed_size is not None and config.rnn_event_encoder:
+                logging.info("Estimator: Using RNN Event Encoder")
+                self.event_encoder = RnnEncoder(self.event_embed_size, self.event_encoder_outsize)
+            elif self.event_embed_size is not None:
                 self.event_encoder = AverageEncoder(self.event_embed_size)
             else: 
                 assert event_encoder_outsize == len(evocab.itos), "event_encoder_outsize incorrectly specified for OneHot, should be vocab size"

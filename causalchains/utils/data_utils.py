@@ -118,6 +118,7 @@ def send_instance_to(instance, device):
     instance.e1 = instance.e1.to(device=device)
     instance.e2 = instance.e2.to(device=device)
     instance.e1prev_intext= (instance.e1prev_intext[0].to(device=device), instance.e1prev_intext[1].to(device=device))
+    instance.allprev = (instance.allprev[0].to(device=device), instance.allprev[1].to(device=device))
     return instance
 
 def create_mask(instance, lengths):
@@ -130,6 +131,7 @@ def create_mask(instance, lengths):
     mask = mask.float().to(device=instance.device)
 
     return mask
+
 
 class InstanceDataset(ttdata.Dataset):
     'Dataset for a single training instance (event 1, event 2, text, other events)'
@@ -155,8 +157,9 @@ class InstanceDataset(ttdata.Dataset):
         e1 = ExtendableField(event_vocab, sequential=False)
         e2 = ExtendableField(event_vocab, sequential=False)
         e1prev_intext = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Bag of previous events in text
+        allprev = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Chain of events including e1 (essentially just e1prev_intext + e1)
 
-        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext)]
+        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext), ('allprev', allprev)]
         examples = []
 
         if not filter_unk_events:
@@ -176,8 +179,9 @@ class InstanceDataset(ttdata.Dataset):
                     e1_data = json_line['e1']
                     e2_data = json_line['e2']
                     e1prev_intext_data = json_line['e1prev_intext']
+                    allprev_data = e1prev_intext_data + [e1_data]
 
-                    examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data], fields))
+                    examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data, allprev_data], fields))
 
      
             super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)

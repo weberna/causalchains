@@ -115,8 +115,8 @@ def train(args):
     logging.info("Finished Loading Training Dataset {} examples".format(len(train_dataset)))
     logging.info("Finished Loading Valid Dataset {} examples".format(len(valid_dataset)))
 
-    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=None)
-    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.e1_text), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=None)
+    train_batches = BatchIter(train_dataset, args.batch_size, sort_key=lambda x:len(x.allprev), train=True, repeat=False, shuffle=True, sort_within_batch=True, device=None)
+    valid_batches = BatchIter(valid_dataset, args.batch_size, sort_key=lambda x:len(x.allprev), train=False, repeat=False, shuffle=False, sort_within_batch=True, device=None)
     train_data_len = len(train_dataset)
     valid_data_len = len(valid_dataset)
 
@@ -193,9 +193,9 @@ if __name__ == "__main__":
     parser.add_argument('--valid_data', type=str)
     parser.add_argument('--evocab', type=str, help='the event vocabulary pickle file', default='./data/evocab_freq25')
     parser.add_argument('--tvocab', type=str, help='the text vocabulary pickle file', default='./data/tvocab_freq100')
-    parser.add_argument('--event_embed_size', type=int, default=128, help='size of event embeddings')
-    parser.add_argument('--text_embed_size', type=int, default=128, help='size of text embeddings')
-    parser.add_argument('--text_enc_output', type=int, default=128, help='size of output of text encoder')
+    parser.add_argument('--event_embed_size', type=int, default=300, help='size of event embeddings')
+    parser.add_argument('--text_embed_size', type=int, default=300, help='size of text embeddings')
+    parser.add_argument('--text_enc_output', type=int, default=300, help='size of output of text encoder')
     parser.add_argument('--mlp_hidden_dim', type=int, default=300, help='size of mlp hidden layer for component models')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')
     parser.add_argument('--log_every', type=int, default=500)
@@ -212,6 +212,7 @@ if __name__ == "__main__":
     parser.add_argument('--load_opt', type=str)
     parser.add_argument('--onehot_events', action='store_true', help='Dont embed events for input, just use onehot features')
     parser.add_argument('--combine_events', action='store_true', help='Combine e1 with previous context (average it in if using embeddings)')
+    parser.add_argument('--rnn_event_encoder', action='store_true', help='Encode events with rnn')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained glove embeddings')
     parser.add_argument('--load_pickle', action='store_true', help='Load preprocessed (pickled) examples, is quicker')
 
