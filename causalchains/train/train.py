@@ -76,7 +76,7 @@ def train(args):
 
     if args.load_model:
         logging.info("Loading the Model")
-        model = torch.load(args.load_model)
+        model = torch.load(args.load_model, map_location=args.device)
     else:
         logging.info("Creating the Model")
         if args.onehot_events:
@@ -86,6 +86,17 @@ def train(args):
             logging.info("Model Type: SemiNaiveAdjustmentEstimator")
             model = estimators.SemiNaiveAdjustmentEstimator(args, evocab, tvocab)
 
+
+    if args.finetune:
+        assert args.load_model
+        logging.info("Finetuning...")
+        if args.freeze:
+            logging.info("Freezing...")
+            for param in model.parameters():
+                param.requires_grad = False
+        model = estimators.AdjustmentEstimator(args, evocab, tvocab, model)
+
+
     model = model.to(device=args.device)
 
     #create the optimizer
@@ -94,7 +105,7 @@ def train(args):
         optimizer = torch.load(args.load_opt)
     else:
         logging.info("Creating the optimizer anew")
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = torch.optim.Adam(filter(lambda x: x.requires_grad, model.parameters()), lr=args.lr)
       #  optimizer = torch.optim.Adagrad(model.parameters(), lr=args.lr)
 
     logging.info("Loading Datasets")
@@ -214,6 +225,8 @@ if __name__ == "__main__":
     parser.add_argument('--combine_events', action='store_true', help='Combine e1 with previous context (average it in if using embeddings)')
     parser.add_argument('--rnn_event_encoder', action='store_true', help='Encode events with rnn')
     parser.add_argument('--use_pretrained', action='store_true', help='Use pretrained glove embeddings')
+    parser.add_argument('--finetune', action='store_true', help='Fine tune on out of text events')
+    parser.add_argument('--freeze', action='store_true', help='Freeze previous layers')
     parser.add_argument('--load_pickle', action='store_true', help='Load preprocessed (pickled) examples, is quicker')
 
 

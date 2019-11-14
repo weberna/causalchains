@@ -119,6 +119,7 @@ def send_instance_to(instance, device):
     instance.e2 = instance.e2.to(device=device)
     instance.e1prev_intext= (instance.e1prev_intext[0].to(device=device), instance.e1prev_intext[1].to(device=device))
     instance.allprev = (instance.allprev[0].to(device=device), instance.allprev[1].to(device=device))
+    instance.e1prev_outtext= (instance.e1prev_outtext[0].to(device=device), instance.e1prev_outtext[1].to(device=device))
     return instance
 
 def create_mask(instance, lengths):
@@ -158,8 +159,9 @@ class InstanceDataset(ttdata.Dataset):
         e2 = ExtendableField(event_vocab, sequential=False)
         e1prev_intext = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Bag of previous events in text
         allprev = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Chain of events including e1 (essentially just e1prev_intext + e1)
+        e1prev_outtext = ExtendableField(event_vocab, sequential=True, include_lengths=True) #Bag of previous events not in text
 
-        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext), ('allprev', allprev)]
+        fields = [('e1_text', e1_text), ('e1', e1), ('e2', e2), ('e1prev_intext', e1prev_intext), ('allprev', allprev), ('e1prev_outtext', e1prev_outtext)]
         examples = []
 
         if not filter_unk_events:
@@ -180,8 +182,12 @@ class InstanceDataset(ttdata.Dataset):
                     e2_data = json_line['e2']
                     e1prev_intext_data = json_line['e1prev_intext']
                     allprev_data = e1prev_intext_data + [e1_data]
+                    if 'e1prev_outtext' in json_line: 
+                        e1prev_outtext_data = json_line['e1prev_outtext']
+                    else:
+                        e1prev_outtext_data = []
 
-                    examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data, allprev_data], fields))
+                    examples.append(ttdata.Example.fromlist([e1_text_data, e1_data, e2_data, e1prev_intext_data, allprev_data, e1prev_outtext_data], fields))
 
      
             super(InstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)

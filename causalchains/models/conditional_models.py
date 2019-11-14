@@ -17,7 +17,7 @@ dummy = EmptyEncoder(0)
 class ExpectedOutcome(nn.Module):
     'Models E[e2 | e1, e1_text], Use Embeddings for event representation'
 
-    def __init__(self, event_embeddings, text_embeddings, event_encoder, text_encoder, evocab, tvocab, config):
+    def __init__(self, event_embeddings, text_embeddings, event_encoder, text_encoder, evocab, tvocab, config, out_event_encoder=None):
         """
         Params:
             (Torch.nn.Embeddings) event_embeddings : Pytorch nn.Embeddings Module for events (Pass in None for no event embeddings)
@@ -25,12 +25,15 @@ class ExpectedOutcome(nn.Module):
             (Torch.nn.Module) event_encoder : A module for encodeing events (pass None if not using prev events)
             (Torch.nn.Module) text_encoder : A module for encodeing text 
                     should take in [batch X num tokens X embd dim] Tensor and output [batch X output dim vector]
+
+            (Torch.nn.Module) out_event_encoder : A module for previous out of text events, use when finetunning
         """
         super(ExpectedOutcome, self).__init__()
 
         self.event_embeddings = event_embeddings
         self.text_embeddings = text_embeddings
         self.text_encoder = text_encoder
+        self.out_event_encoder = out_event_encoder
         self.event_encoder = event_encoder if event_encoder is not None else dummy
         if event_encoder is None:
             logging.info("Not using Event Encoder for Previous Events, Thus, not using Previous Events as input")
@@ -42,18 +45,32 @@ class ExpectedOutcome(nn.Module):
 
         self.e_pad = evocab.stoi[PAD_TOK]
         self.t_pad = tvocab.stoi[PAD_TOK]
+        assert self.e_pad == self.event_embeddings.padding_idx
+        assert self.t_pad == self.text_embeddings.padding_idx
         self.combine_events = config.combine_events
         self.rnn_event_encoder = config.rnn_event_encoder
+        self.finetune = config.finetune
+
+        if self.rnn_event_encoder:
+            self.combine_events = False
+
+        if self.finetune:
+            assert self.out_event_encoder
+            logging.info("Finetuning with out of text events")
+            self.rnn_event_encoder = False
+            self.combine_events = False
 
 
         if self.combine_events or self.rnn_event_encoder: #Dont give seperate position to e1, treat it like previous context
             logging.info("ExpectedOutcome: No unique position for e1, combine with prev")
             mlp_input_dim = self.text_encoder.output_dim + self.event_encoder.output_dim
+        elif self.finetune:
+            mlp_input_dim = self.text_encoder.output_dim + self.event_encoder.output_dim + self.out_event_encoder.output_dim
         else:
             mlp_input_dim = self.event_embed_dim + self.text_encoder.output_dim + self.event_encoder.output_dim
 
-        if self.event_embeddings is not None:
 
+        if self.event_embeddings is not None:
             self.logits_mlp = nn.Linear(mlp_input_dim, self.num_events) #Not really a MLP, but eh
         else:
             logging.info("Not using Event Embeddings, Thus, Using One Hot Features for Events in Conditional Expectation Model")
@@ -82,14 +99,20 @@ class ExpectedOutcome(nn.Module):
                 events = e1 + e1prev
                 events = torch.where(events < 2, events, torch.ones(events.shape, dtype=events.dtype, device=events.device)) #make sure all features are binary (not greater than 2)
                 mlp_input = torch.cat([events, encoded_text], dim=1)
+            elif self.finetune:
+                allprev_emb = self.event_embeddings(input.allprev[0]) #[batch, maxlen, embdsize]
+                encoded_events = self.event_encoder(allprev_emb, input.allprev[1])
+                out_event_mask = du.create_mask(input.e1prev_outtext[0], input.e1prev_outtext[1])  #Assuming out_event_encoder is just averaging
+                encoded_out_events = self.out_event_encoder(self.event_embeddings(input.e1prev_outtext[0]), input.e1prev_outtext[1], out_event_mask)
+                mlp_input = torch.cat([encoded_text, encoded_events, encoded_out_events], dim=1)
+            elif self.rnn_event_encoder:
+                allprev_emb = self.event_embeddings(input.allprev[0]) #[batch, maxlen, embdsize]
+                encoded_events = self.event_encoder(allprev_emb, input.allprev[1])
+                mlp_input = torch.cat([encoded_text, encoded_events], dim=1)
             elif self.combine_events:
                 combined_events = torch.cat([input.e1.unsqueeze(-1), input.e1prev_intext[0]], dim=1)
                 event_mask = du.create_mask(combined_events, input.e1prev_intext[1]+1)
                 encoded_events = self.event_encoder(self.event_embeddings(combined_events), input.e1prev_intext[1], event_mask)
-                mlp_input = torch.cat([encoded_text, encoded_events], dim=1)
-            elif self.rnn_event_encoder:
-                allprev_emb = self.event_embeddings(input.allprev[0]) #[batch, maxlen, embdsize]
-                encoded_events = self.event_encoder(allprev_emb, input.allprev[1])
                 mlp_input = torch.cat([encoded_text, encoded_events], dim=1)
             else: #Regular avg encoder
                 e1 = self.event_embeddings(input.e1) #[batch, embd_size]

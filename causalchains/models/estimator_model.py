@@ -86,6 +86,25 @@ class Estimator(nn.Module):
         """
         raise NotImplementedError
 
+
+class FineTuneEstimator(nn.Module):  #Assume using rnn encoder for events, cnn encoder for text
+    'An estimator with components like the event embeddings, event encoder, text encoder,... pretrained, fixed, and passed in'
+    def __init__(self, config, old_model):
+        """
+        Params:
+            old_model (Estimator) : The previous Estimator model we are fine tunning on
+        """
+        super(FineTuneEstimator, self).__init__()
+        self.event_embeddings = old_model.event_embeddings
+        self.text_embeddings = old_model.text_embeddings
+        self.event_encoder = old_model.event_encoder
+        self.text_encoder = old_model.text_encoder
+        self.event_embed_size = self.event_embeddings.weight.shape[1]
+        self.text_embed_size = self.text_embeddings.weight.shape[1]
+        self.event_encoder_outsize= self.event_encoder.output_dim
+        self.text_encoder_outsize= self.text_encoder.output_dim
+        self.out_event_encoder = AverageEncoder(self.event_embed_size)
+        
     
 
 
@@ -112,6 +131,27 @@ class NaiveAdjustmentEstimator(Estimator):
         exp_out = self.expected_outcome(instance)
         return {EXP_OUTCOME_COMPONENT: exp_out}
         
+
+class AdjustmentEstimator(FineTuneEstimator):
+    'Estimate ACE with Backdoor adjustment considering previous events that occured in and out of text, used with finetunning'
+    def __init__(self, config, evocab, tvocab, old_model):
+        super(AdjustmentEstimator, self).__init__(config, old_model)
+
+        self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
+                                                             self.text_embeddings, 
+                                                             event_encoder=self.event_encoder,
+                                                             text_encoder=self.text_encoder,
+                                                             evocab=evocab,tvocab=tvocab,
+                                                             config=config,out_event_encoder=self.out_event_encoder)
+
+
+        assert self.expected_outcome.includes_e1prev_intext()
+        assert not self.expected_outcome.onehot_events()
+
+    def forward(self, instance):
+        exp_out = self.expected_outcome(instance)
+        return {EXP_OUTCOME_COMPONENT: exp_out}
+
 
 class SemiNaiveAdjustmentEstimator(Estimator):
     'Estimate ACE with Backdoor adjustment considering previous events that occured in text (but not those that didnt appear in text)'
