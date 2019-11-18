@@ -22,6 +22,8 @@ import logging
 #Reserved Special Tokens
 PAD_TOK = "<pad>"
 UNK_TOK = "<unk>"
+SOS_TOK = "<sos>"
+EOS_TOK = "<eos>"
 
 #PAD has an id of 1
 #UNK has id of 0
@@ -122,6 +124,15 @@ def send_instance_to(instance, device):
     instance.e1prev_outtext= (instance.e1prev_outtext[0].to(device=device), instance.e1prev_outtext[1].to(device=device))
     return instance
 
+def lm_send_instance_to(instance, device):
+    """
+    Convert Batch object so that it goes on device(gpu/cpu)
+    """
+    instance.text = (instance.text[0].to(device=device), instance.text[1].to(device=device))
+    instance.target= (instance.target[0].to(device=device), instance.target[1].to(device=device))
+    return instance
+
+
 def create_mask(instance, lengths):
     """
     Param: 
@@ -217,5 +228,34 @@ class InstanceDataset(ttdata.Dataset):
         return output
 
 
+class LmInstanceDataset(ttdata.Dataset):
+    'Data set for single chain per line'
+    def __init__(self, path, event_vocab, max_len=20, min_len=3, sos_str=SOS_TOK, eos_str=EOS_TOK):
+        text_field = ExtendableField(event_vocab, sequential=True, include_lengths=True, init_token=sos_str) #Make sure sos is in vocab!
+        target_field = ExtendableField(event_vocab, sequential=True, include_lengths=True, eos_token=eos_str) #Make sure sos is in vocab!
 
+        fields = [('text', text_field), ('target', target_field)]
+        examples = []
+        with open(path, 'r') as f:
+            for line in f:
+                text = line.lower()
+                examples.append(ttdata.Example.fromlist([text,text], fields))
+
+        filter_pred = lambda example: len(example.text) <= max_len and len(example.text) >= min_len
+        super(LmInstanceDataset, self).__init__(examples, fields, filter_pred=filter_pred)
+
+
+
+    def example_to_batch(self, example, device=None, multiple=False):
+        """
+        Convert a single InstanceDataset example into a Batch object that can be directly 
+        fed into the model. Useful for interactive testing of the model
+        """
+        if not multiple:
+            example = [example]
+
+        if device is None:
+            return ttdata.Batch(example, self)
+        else:
+            return send_instance_to(ttdata.Batch(example, self), device)
 

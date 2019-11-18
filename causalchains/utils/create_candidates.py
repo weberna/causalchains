@@ -4,6 +4,7 @@ import csv
 import json
 import argparse
 import causalchains.utils.data_utils as du
+from pattern.en import conjugate
 from collections import namedtuple
 
 CANDIDATE_STOP_EVENTS = ['be', 'go', 'do', 'have'] #Stop events for candidates
@@ -177,7 +178,7 @@ def convert_pronoun(e1_arg, rel):
 
 
 
-def convert_to_text(cand_pred, e1_arg, e1_rel, e1_pred):
+def convert_to_text_old(cand_pred, e1_arg, e1_rel, e1_pred):
     if len(cand_pred.split('->')) == 1: #from concept net or VO
         event = cand_pred + "->" + e1_rel
     else:
@@ -197,6 +198,37 @@ def convert_to_text(cand_pred, e1_arg, e1_rel, e1_pred):
         event_text = "Someone" + " " + cand_pred + " " + "something to " + e1_arg
     else:
         event_text = "Someone" + " " + cand_pred + " " + e1_arg
+
+    return event_text.capitalize(), event
+
+
+def convert_to_text(cand_pred, e1_arg, e1_rel, e1_pred):
+    if len(cand_pred.split('->')) == 1: #from concept net or VO
+        event = cand_pred + "->" + e1_rel
+    else:
+        event = cand_pred
+        e1_rel = cand_pred.split('->')[1]
+        cand_pred = cand_pred.split('->')[0]
+
+    e1_arg = convert_pronoun(e1_arg, e1_rel)
+
+    if e1_arg.lower() == 'you':
+        conj = conjugate(cand_pred, '2sgp')
+    else:
+        conj = conjugate(cand_pred, '1sgp')
+    text_cand_pred = conj if conj else cand_pred
+
+    if e1_rel == 'nsubj':
+        #These two exceptions common enough to handle outright
+        if (e1_pred == 'see' and cand_pred == 'show') or (e1_pred == 'have' and cand_pred == 'give'): 
+            event_text = "(Someone or something)" + " " + text_cand_pred + " something to " + e1_arg
+            event = cand_pred + "->iobj"
+        else:
+            event_text = e1_arg + " " + text_cand_pred + " " + "(something or someone)"
+    elif e1_rel == 'iobj':
+        event_text = "(Someone or something)" + " " + text_cand_pred + " " + "something to " + e1_arg
+    else:
+        event_text = "(Someone or something)" + " " + text_cand_pred + " " + e1_arg
 
     return event_text.capitalize(), event
 

@@ -61,7 +61,7 @@ def normalized_scores_matrix(args, model, batch_size=1024):
     events = evocab.itos
     so_events = [x for x in events if len(x.split('->'))==2 and x.split('->')[1] in ['nsubj', 'dobj', 'iobj']]
     #so_events = so_events[:1000]
-#    so_events = so_events[:2000]
+    so_events = so_events[:2000]
 
     so_events_itos = list(enumerate(so_events))
     so_events_stoi = dict([(x[1], x[0]) for x in so_events_itos])
@@ -160,6 +160,7 @@ if __name__ == "__main__":
     else:
         model = torch.load(args.model, map_location=args.device)
         model.eval()
+        setattr(model.expected_outcome, 'finetune', False)
 
         normalized_scores_matrix(args, model)
 

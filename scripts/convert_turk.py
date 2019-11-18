@@ -9,6 +9,21 @@ ACCEPTABLE_OUT = [3,4]  #Which scores do we include in the data, default is 3 (m
 JSON_COL = "Input.json_variables"
 ANSWER_COL = "Answer.statement_likelihood_"
 
+def convert_to_readable(csvfile):
+    hits = []
+    with open(csvfile, 'r') as fi:
+        reader = csv.DictReader(fi)
+        for row in reader:
+            json_cands = json.loads(row[JSON_COL].replace("\\", ""))
+            context = json_cands[0]['CONTEXT'] 
+            cands = [context]
+            for idx, cand in enumerate(json_cands):
+                candidate = cand['CANDIDATE']
+                score = int(row[ANSWER_COL + str(idx+1)])
+                cands.append((candidate, score))
+            hits.append(cands)
+    return hits
+                
 def load_vocab(filename):
     #load vocab from json file
     with open(filename, 'rb') as fi:
