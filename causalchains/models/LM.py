@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from causalchains.utils.data_utils import EOS_TOK, SOS_TOK
 
 class EventLM(nn.Module): 
 
@@ -21,7 +22,7 @@ class EventLM(nn.Module):
         self.vocab = vocab
 
 
-    def forward(self, input, hidden, input2=None): 
+    def forward(self, input, hidden): 
         """
         dropout is on the input and output
 
@@ -38,4 +39,5 @@ class EventLM(nn.Module):
         # logit is [batch_size , vocab]
         logit = self.linear_out(output.view(output.size(0)*output.size(1), output.size(2))) 
         return logit, hidden
+
 

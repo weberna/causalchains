@@ -79,6 +79,17 @@ def load_vocab(filename):
     return voc
 
 
+def convert_to_lm_vocab(evocab, sos_tok=SOS_TOK, eos_tok=EOS_TOK):
+    evocab.stoi[sos_tok] = len(evocab.itos)
+    evocab.itos.append(sos_tok)
+
+    evocab.stoi[eos_tok] = len(evocab.itos)
+    evocab.itos.append(eos_tok)
+
+    assert evocab.stoi[eos_tok] == evocab.itos.index(eos_tok) 
+    assert evocab.stoi[sos_tok] == evocab.itos.index(sos_tok) 
+    return evocab
+
 class ExtendableField(ttdata.Field):
     'A field class that allows the vocab object to be passed in' 
     #This is to avoid having to calculate the vocab every time 
@@ -258,4 +269,6 @@ class LmInstanceDataset(ttdata.Dataset):
             return ttdata.Batch(example, self)
         else:
             return send_instance_to(ttdata.Batch(example, self), device)
+
+
 

@@ -42,6 +42,7 @@ def validation(args, val_batches, model, loss_func):
     model.eval()
 
     valid_loss = 0.0
+    instances_seen = 0
     with torch.no_grad():
         for v_iteration, inst in enumerate(val_batches):
             instance = du.send_instance_to(inst, args.device)
@@ -50,9 +51,12 @@ def validation(args, val_batches, model, loss_func):
             exp_outcome_loss = loss_func(exp_outcome_out, instance.e2)
             loss = exp_outcome_loss.cpu()
 
-            valid_loss += loss
+            new_instances = exp_outcome_out.shape[0]
+            instances_seen += new_instances
+
+            valid_loss += loss*new_instances #since loss is averaged over batch
   
-    valid_loss = valid_loss/(v_iteration+1)   
+    valid_loss = valid_loss/instances_seen  
     return valid_loss
 
 
@@ -70,7 +74,7 @@ def train(args):
     logging.info("Text Vocab Loaded, Size {}".format(len(tvocab.stoi.keys())))
 
     if args.use_pretrained:
-        pretrained = Glove(name='6B', dim=args.text_embed_size, unk_init=torch.Tensor.normal_)
+        pretrained = GloVe(name='6B', dim=args.text_embed_size, unk_init=torch.Tensor.normal_)
         tvocab = du.load_vectors(pretrained)
         logging.info("Loaded Pretrained Word Embeddings")
 
@@ -96,6 +100,14 @@ def train(args):
                 param.requires_grad = False
         model = estimators.AdjustmentEstimator(args, evocab, tvocab, model)
 
+        #Still finetune the last layer even if freeze is on (if freeze is on , then everything else is frozen)
+        model.expected_outcome.event_text_logits_mlp.weight.requires_grad = True
+        model.expected_outcome.event_text_logits_mlp.bias.requires_grad = True
+
+        logging.info("Trainable Params: {}".format([x[0] for x in model.named_parameters() if x[1].requires_grad]))
+
+
+
 
     model = model.to(device=args.device)
 
@@ -104,9 +116,15 @@ def train(args):
         logging.info("Loading the optimizer state")
         optimizer = torch.load(args.load_opt)
     else:
-        logging.info("Creating the optimizer anew")
-        optimizer = torch.optim.Adam(filter(lambda x: x.requires_grad, model.parameters()), lr=args.lr)
-      #  optimizer = torch.optim.Adagrad(model.parameters(), lr=args.lr)
+        if args.optimizer == 'adagrad':
+            logging.info("Creating Adagrad optimizer anew")
+            optimizer = torch.optim.Adagrad(filter(lambda x: x.requires_grad, model.parameters()), lr=args.lr)
+        elif args.optimizer == 'sgd':
+            logging.info("Creating SGD optimizer anew")
+            optimizer = torch.optim.SGD(filter(lambda x: x.requires_grad, model.parameters()), lr=args.lr)
+        else:
+            logging.info("Creating Adam optimizer anew")
+            optimizer = torch.optim.Adam(filter(lambda x: x.requires_grad, model.parameters()), lr=args.lr)
 
     logging.info("Loading Datasets")
     min_size = model.text_encoder.largest_ngram_size #Add extra pads if text size smaller than largest CNN kernel size
@@ -137,6 +155,11 @@ def train(args):
     start_time = time.time() #start of epoch 1
     best_valid_loss= float('inf')
     best_epoch = args.epochs 
+
+
+    if args.finetune:
+        vloss = validation(args, valid_batches, model, loss_func)
+        logging.info("Pre Finetune Validation Loss: {}".format(vloss))
 
     #MAIN TRAINING LOOP
     for curr_epoch in range(args.epochs):
@@ -207,7 +230,7 @@ if __name__ == "__main__":
     parser.add_argument('--event_embed_size', type=int, default=300, help='size of event embeddings')
     parser.add_argument('--text_embed_size', type=int, default=300, help='size of text embeddings')
     parser.add_argument('--text_enc_output', type=int, default=300, help='size of output of text encoder')
-    parser.add_argument('--mlp_hidden_dim', type=int, default=300, help='size of mlp hidden layer for component models')
+    parser.add_argument('--rnn_hidden_dim', type=int, default=300, help='size of rnn hidden layer for component models')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')
     parser.add_argument('--log_every', type=int, default=500)
     parser.add_argument('--validate_after', type=int, default=5000)

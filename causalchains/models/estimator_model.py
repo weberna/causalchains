@@ -103,7 +103,9 @@ class FineTuneEstimator(nn.Module):  #Assume using rnn encoder for events, cnn e
         self.text_embed_size = self.text_embeddings.weight.shape[1]
         self.event_encoder_outsize= self.event_encoder.output_dim
         self.text_encoder_outsize= self.text_encoder.output_dim
+
         self.out_event_encoder = AverageEncoder(self.event_embed_size)
+        #self.out_event_encoder = OneHotEncoder(self.event_embeddings.weight.shape[0], pad_idx=self.event_embeddings.padding_idx)
         
     
 
@@ -137,16 +139,16 @@ class AdjustmentEstimator(FineTuneEstimator):
     def __init__(self, config, evocab, tvocab, old_model):
         super(AdjustmentEstimator, self).__init__(config, old_model)
 
+        mlp_layer = old_model.expected_outcome.logits_mlp #reuse part of previous last layer
         self.expected_outcome = cmodels.ExpectedOutcome(self.event_embeddings, 
                                                              self.text_embeddings, 
                                                              event_encoder=self.event_encoder,
                                                              text_encoder=self.text_encoder,
                                                              evocab=evocab,tvocab=tvocab,
-                                                             config=config,out_event_encoder=self.out_event_encoder)
+                                                             config=config,out_event_encoder=self.out_event_encoder, old_mlp_layer=mlp_layer)
 
 
         assert self.expected_outcome.includes_e1prev_intext()
-        assert not self.expected_outcome.onehot_events()
 
     def forward(self, instance):
         exp_out = self.expected_outcome(instance)
@@ -158,7 +160,7 @@ class SemiNaiveAdjustmentEstimator(Estimator):
     def __init__(self, config, evocab, tvocab):
         super(SemiNaiveAdjustmentEstimator, self).__init__(config.event_embed_size, 
                                                        config.text_embed_size,
-                                                       event_encoder_outsize=config.event_embed_size,
+                                                       event_encoder_outsize=config.rnn_hidden_dim, #assume using rnn event encoder
                                                        text_encoder_outsize=config.text_enc_output,
                                                        evocab=evocab, tvocab=tvocab, config=config)
 

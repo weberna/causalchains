@@ -84,7 +84,6 @@ def train(args):
     assert evocab.stoi[EOS_TOK] == evocab.itos.index(EOS_TOK) 
     assert evocab.stoi[SOS_TOK] == evocab.itos.index(SOS_TOK) 
 
-
     if args.load_model:
         logging.info("Loading the Model")
         model = torch.load(args.load_model, map_location=args.device)

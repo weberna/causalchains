@@ -66,11 +66,13 @@ def process_csv(csvfile, vocab):
                         print("{} is not in vocab, skipping...".format(candidate))
 
             if e1prev_outtext:
-                newrow['e1prev_outtext'] = e1prev_outtext
-                data_instances.append(newrow)
-                print("Creating New Row with {} Out of Text Entries".format(len(e1prev_outtext)))
+                 print("Creating New Row with {} Out of Text Entries".format(len(e1prev_outtext)))
             else:
                 print("No valid Out of Text Events")
+
+            newrow['e1prev_outtext'] = e1prev_outtext
+            data_instances.append(newrow)
+
     return data_instances
 
 
